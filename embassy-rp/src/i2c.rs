@@ -1,5 +1,6 @@
 use core::future;
 use core::marker::PhantomData;
+use core::ops::Deref;
 use core::task::Poll;
 
 use embassy_hal_internal::{into_ref, PeripheralRef};
@@ -295,12 +296,23 @@ impl<'d, T: Instance> I2c<'d, T, Async> {
 
     pub async fn read_async(&mut self, addr: u16, buffer: &mut [u8]) -> Result<(), Error> {
         Self::setup(addr)?;
-        self.read_async_internal(buffer, false, true).await
+        self.read_async_internal(buffer, true, true).await
     }
 
     pub async fn write_async(&mut self, addr: u16, bytes: impl IntoIterator<Item = u8>) -> Result<(), Error> {
         Self::setup(addr)?;
         self.write_async_internal(bytes, true).await
+    }
+
+    pub async fn write_read_async(
+        &mut self,
+        addr: u16,
+        bytes: impl IntoIterator<Item = u8>,
+        buffer: &mut [u8],
+    ) -> Result<(), Error> {
+        Self::setup(addr)?;
+        self.write_async_internal(bytes, true).await?;
+        self.read_async_internal(buffer, true, true).await
     }
 }
 
@@ -316,6 +328,18 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 
         T::waker().wake();
     }
+}
+
+pub(crate) fn set_up_i2c_pin<'d>(pin: &impl crate::gpio::Pin) {
+    pin.gpio().ctrl().write(|w| w.set_funcsel(3));
+    pin.pad_ctrl().write(|w| {
+        w.set_schmitt(true);
+        w.set_slewfast(false);
+        w.set_ie(true);
+        w.set_od(false);
+        w.set_pue(true);
+        w.set_pde(false);
+    });
 }
 
 impl<'d, T: Instance + 'd, M: Mode> I2c<'d, T, M> {
@@ -355,23 +379,8 @@ impl<'d, T: Instance + 'd, M: Mode> I2c<'d, T, M> {
         p.ic_rx_tl().write(|w| w.set_rx_tl(0));
 
         // Configure SCL & SDA pins
-        scl.gpio().ctrl().write(|w| w.set_funcsel(3));
-        sda.gpio().ctrl().write(|w| w.set_funcsel(3));
-
-        scl.pad_ctrl().write(|w| {
-            w.set_schmitt(true);
-            w.set_ie(true);
-            w.set_od(false);
-            w.set_pue(true);
-            w.set_pde(false);
-        });
-        sda.pad_ctrl().write(|w| {
-            w.set_schmitt(true);
-            w.set_ie(true);
-            w.set_od(false);
-            w.set_pue(true);
-            w.set_pde(false);
-        });
+        set_up_i2c_pin(scl.deref());
+        set_up_i2c_pin(sda.deref());
 
         // Configure baudrate
 
@@ -561,7 +570,6 @@ impl<'d, T: Instance + 'd, M: Mode> I2c<'d, T, M> {
     pub fn blocking_read(&mut self, address: u8, read: &mut [u8]) -> Result<(), Error> {
         Self::setup(address.into())?;
         self.read_blocking_internal(read, true, true)
-        // Automatic Stop
     }
 
     pub fn blocking_write(&mut self, address: u8, write: &[u8]) -> Result<(), Error> {
@@ -573,7 +581,6 @@ impl<'d, T: Instance + 'd, M: Mode> I2c<'d, T, M> {
         Self::setup(address.into())?;
         self.write_blocking_internal(write, false)?;
         self.read_blocking_internal(read, true, true)
-        // Automatic Stop
     }
 }
 
@@ -698,7 +705,7 @@ mod nightly {
             let addr: u16 = address.into();
 
             Self::setup(addr)?;
-            self.read_async_internal(read, false, true).await
+            self.read_async_internal(read, true, true).await
         }
 
         async fn write(&mut self, address: A, write: &[u8]) -> Result<(), Self::Error> {
@@ -713,7 +720,7 @@ mod nightly {
 
             Self::setup(addr)?;
             self.write_async_internal(write.iter().cloned(), false).await?;
-            self.read_async_internal(read, false, true).await
+            self.read_async_internal(read, true, true).await
         }
 
         async fn transaction(&mut self, address: A, operations: &mut [Operation<'_>]) -> Result<(), Self::Error> {

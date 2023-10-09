@@ -1,11 +1,14 @@
 use core::future;
 use core::marker::PhantomData;
+use core::ops::Deref;
 use core::task::Poll;
 
 use embassy_hal_internal::into_ref;
 use pac::i2c;
 
-use crate::i2c::{i2c_reserved_addr, AbortReason, Instance, InterruptHandler, SclPin, SdaPin, FIFO_SIZE};
+use crate::i2c::{
+    i2c_reserved_addr, set_up_i2c_pin, AbortReason, Instance, InterruptHandler, SclPin, SdaPin, FIFO_SIZE,
+};
 use crate::interrupt::typelevel::{Binding, Interrupt};
 use crate::{pac, Peripheral};
 
@@ -91,6 +94,7 @@ impl<'d, T: Instance> I2cSlave<'d, T> {
             w.set_master_mode(false);
             w.set_ic_slave_disable(false);
             w.set_tx_empty_ctrl(true);
+            w.set_rx_fifo_full_hld_ctrl(true);
         });
 
         // Set FIFO watermarks to 1 to make things simpler. This is encoded
@@ -100,23 +104,8 @@ impl<'d, T: Instance> I2cSlave<'d, T> {
         p.ic_rx_tl().write(|w| w.set_rx_tl(0));
 
         // Configure SCL & SDA pins
-        scl.gpio().ctrl().write(|w| w.set_funcsel(3));
-        sda.gpio().ctrl().write(|w| w.set_funcsel(3));
-
-        scl.pad_ctrl().write(|w| {
-            w.set_schmitt(true);
-            w.set_ie(true);
-            w.set_od(false);
-            w.set_pue(true);
-            w.set_pde(false);
-        });
-        sda.pad_ctrl().write(|w| {
-            w.set_schmitt(true);
-            w.set_ie(true);
-            w.set_od(false);
-            w.set_pue(true);
-            w.set_pde(false);
-        });
+        set_up_i2c_pin(scl.deref());
+        set_up_i2c_pin(sda.deref());
 
         // Clear interrupts
         p.ic_clr_intr().read();
